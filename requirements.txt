@@ -1,0 +1,5 @@
+langchain
+openai
+supabase
+google-auth-oauthlib
+python-dotenv
