@@ -12,3 +12,8 @@ __pycache__/
 .venv/
 __pycache__/
 
+
+.env
+.ingest_state.json
+.venv/
+__pycache__/
