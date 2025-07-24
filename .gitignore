@@ -5,3 +5,10 @@ __pycache__/
 .DS_Store
 .vscode/
 *.env
+
+# Secrets / local state
+.env
+.ingest_state.json
+.venv/
+__pycache__/
+
