@@ -1,27 +1,36 @@
 from __future__ import annotations
-import os, sys, logging, sys
+import os, sys, time, logging, random
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_community.vectorstores import SupabaseVectorStore
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-import time
+from langfuse.langchain import CallbackHandler
 
-# Silence loader noise (shouldn't run anyway, but just in case)
+from kb_version import get_kb_version  # reads kb_version from Supabase
+
+# Silence loader noise
 logging.getLogger("langchain_community.document_loaders.notiondb").setLevel(logging.ERROR)
 
 load_dotenv()
 
-# Slow down answer generation
-STREAM_DELAY = float(os.getenv("STREAM_DELAY", "0.03"))
-
-MAX_CTX_CHARS   = int(os.getenv("MAX_CTX_CHARS", "6000"))
+# ── Toggles & config ─────────────────────────────────────────────────────────
+STREAM_DELAY   = float(os.getenv("STREAM_DELAY", "0.03"))
+MAX_CTX_CHARS  = int(os.getenv("MAX_CTX_CHARS", "6000"))
+TOP_K          = int(os.getenv("TOP_K", "3"))
 
 SUPABASE_URL   = os.environ["SUPABASE_URL"]
 SUPABASE_KEY   = os.environ["SUPABASE_KEY"]
 SUPABASE_TABLE = os.getenv("SUPABASE_TABLE", "torchlite_embeddings")
-TOP_K          = int(os.getenv("TOP_K", 3))
+
+# Tracing switches
+TRACE_ENABLED  = os.getenv("TRACE_ENABLED", "1") == "1"
+SAMPLE_RATE    = float(os.getenv("LANGFUSE_SAMPLING_RATE", "1"))
+
+# Models (also reported in metadata)
+LLM_MODEL      = os.getenv("LLM_MODEL", "gpt-3.5-turbo")
+EMBED_MODEL    = os.getenv("EMBED_MODEL", "text-embedding-3-small")
 
 SYSTEM_TXT = (
     "You are AstroLabs' knowledge assistant. "
@@ -29,48 +38,76 @@ SYSTEM_TXT = (
     "If the answer is not present, reply exactly: I don't know."
 )
 
+# Langfuse callback
+langfuse_handler = CallbackHandler()
+
+def get_callbacks():
+    """Return callbacks list according to toggle + sampling."""
+    if not TRACE_ENABLED:
+        return []
+    return [langfuse_handler] if random.random() < SAMPLE_RATE else []
+
+# ── Vector DB ────────────────────────────────────────────────────────────────
 def get_vectordb() -> SupabaseVectorStore:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
     return SupabaseVectorStore(
         client=supabase,
-        embedding=OpenAIEmbeddings(model="text-embedding-3-small"),
+        embedding=OpenAIEmbeddings(model=EMBED_MODEL),
         table_name=SUPABASE_TABLE,
         query_name=f"match_{SUPABASE_TABLE}",
     )
 
-def answer_stream(question: str, vectordb):
+# ── Answer (streaming) ───────────────────────────────────────────────────────
+def answer_stream(question: str, vectordb: SupabaseVectorStore):
     t0 = time.perf_counter()
 
-    # --- super fast retrieval (single RPC) ---
+    # Retrieval
     docs = vectordb.similarity_search(question, k=TOP_K)
     t1   = time.perf_counter()
 
-    # --- cap context length to keep prompt small ---
+    # Build bounded context
     ctx_parts, running = [], 0
     for d in docs:
-        txt_len = len(d.page_content)
-        if running + txt_len > MAX_CTX_CHARS:
+        txt = d.page_content
+        if running + len(txt) > MAX_CTX_CHARS:
             break
-        ctx_parts.append(d.page_content)
-        running += txt_len
+        ctx_parts.append(txt)
+        running += len(txt)
     context = "\n\n".join(ctx_parts)
 
-    # --- prompt & chain ---
+    # Prompt + LLM
     prompt = ChatPromptTemplate.from_messages([
         ("system", SYSTEM_TXT),
         MessagesPlaceholder(variable_name="messages"),
         ("human", "Context:\n{context}\n\n{user_question}"),
     ])
-    chain = prompt | ChatOpenAI(model_name="gpt-3.5-turbo", temperature=0, streaming=True)
+    chain = prompt | ChatOpenAI(model_name=LLM_MODEL, temperature=0, streaming=True)
 
-    # --- stream answer ---
+    callbacks   = get_callbacks()
+    kb_version  = get_kb_version()
+
+    # Stream answer
     print("🟢 Answer:\n", end="", flush=True)
     llm_start = time.perf_counter()
-    for chunk in chain.stream({
-        "messages":      [("human", question)],
-        "context":       context,
-        "user_question": question,
-    }):
+    for chunk in chain.stream(
+        {
+            "messages":      [("human", question)],
+            "context":       context,
+            "user_question": question,
+        },
+        config={
+            "callbacks": callbacks,
+            "metadata": {
+                "app": "torchlite",
+                "env": os.getenv("APP_ENV", "dev"),
+                "table": SUPABASE_TABLE,
+                "kb_version": kb_version,
+                "model": LLM_MODEL,
+                "embed_model": EMBED_MODEL,
+            },
+            "tags": ["torchlite", "retrieval-qa"],
+        },
+    ):
         txt = getattr(chunk, "content", "") or getattr(chunk, "delta", "")
         if txt:
             print(txt, end="", flush=True)
@@ -79,12 +116,13 @@ def answer_stream(question: str, vectordb):
     llm_end = time.perf_counter()
     print("\n")
 
-    # latency print
+    # Latency
     total = llm_end - t0
     print(f"⏱️  retrieval: {t1 - t0:.2f}s | LLM: {llm_end - llm_start:.2f}s | total: {total:.2f}s\n")
 
     return docs
 
+# ── Main ─────────────────────────────────────────────────────────────────────
 def main():
     question = " ".join(sys.argv[1:]) or "What is the focus of Week 1?"
     vectordb = get_vectordb()

@@ -13,8 +13,9 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
 
 from loaders.notion_simple_page import NotionSimplePageLoader
+from kb_version import bump_kb_version   # ← NEW
 
-# ---- quiet noisy warnings ----
+# quiet warnings
 logging.getLogger("langchain_community.document_loaders.notiondb").setLevel(logging.ERROR)
 
 load_dotenv()
@@ -30,18 +31,17 @@ FORCE_REBUILD       = os.getenv("FORCE", "0") == "1"
 STATE_FILE = Path(".ingest_state.json")
 notion = NotionClient(auth=NOTION_API_KEY)
 
-# ---------- tiny logger ----------
 def log(msg: str):
     print(f"[INGEST] {msg}")
 
-# ---------- state helpers ----------
+# state helpers 
 def load_state() -> dict:
     return json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
 
 def save_state(state: dict) -> None:
     STATE_FILE.write_text(json.dumps(state, indent=2))
 
-# ---------- Notion ----------
+# Notion 
 def search_notion(query: str, obj: str | None, limit: int) -> List[dict]:
     results, cursor = [], None
     while len(results) < limit:
@@ -121,7 +121,6 @@ def upsert_chunks(chunks: List[Document]):
 
     log(f"Upserting {len(chunks)} chunk(s) …")
     t0 = time.perf_counter()
-    # `add_documents` batches internally; you can split manually if desired
     vectordb.add_documents(chunks)
     log(f"Upsert done in {time.perf_counter()-t0:.2f}s")
 
@@ -147,7 +146,7 @@ def main():
     raw_chunks = splitter.split_documents(docs)
     log(f"Chunked into {len(raw_chunks)} pieces in {time.perf_counter()-t0:.2f}s")
 
-    # De-dupe identical text within this batch
+    # de-dup within batch
     seen, unique_chunks = set(), []
     for c in raw_chunks:
         h = doc_hash(c.page_content)
@@ -165,6 +164,10 @@ def main():
     for h in hits_to_process:
         state[h["id"]] = h.get("last_edited_time") or ""
     save_state(state)
+
+    # Bump KB version so caches are invalidated automatically  ← NEW
+    new_ver = bump_kb_version()
+    log(f"KB version bumped → {new_ver}")
 
     log(f"✅ Finished. Total time {time.perf_counter()-t_start:.2f}s.")
 

@@ -1,0 +1,25 @@
+model_list:
+  - model_name: gpt-4o
+    litellm_params: { model: gpt-4o }
+  - model_name: gpt-3.5-turbo
+    litellm_params: { model: gpt-3.5-turbo }
+  - model_name: text-embedding-3-small
+    litellm_params: { model: text-embedding-3-small }
+
+router:
+  strategy: simple_fallback
+  primary: gpt-4o
+  fallbacks: [gpt-3.5-turbo]
+
+litellm_settings:
+  cache: true
+  cache_params:
+    type: redis
+    host: localhost
+    port: 6379
+    ttl: 21600         # 6h
+    namespace: torchlite
+
+general_settings:
+  master_key: astrolabs-proxy-key   # <-- NEW: the key clients must send
+  # disable_auth: false             # default; keep auth ON
