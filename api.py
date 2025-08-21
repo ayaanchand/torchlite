@@ -1,37 +1,85 @@
-from fastapi import FastAPI
-from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel
-from query import answer_stream, vectordb, TOP_K  # import TOP_K too
-from dotenv import load_dotenv
+from __future__ import annotations
 import os
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Any
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse, JSONResponse
+from pydantic import BaseModel
+
+# your existing imports
+from query import answer_stream, vectordb, TOP_K
 
 load_dotenv()
-API_KEY = os.environ.get("RAG_API_KEY")
 
+ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
+
+# --------- models ----------
 class ChatMsg(BaseModel):
-    role: Literal["user","assistant"]
+    role: Literal["user", "assistant"]
     content: str
 
 class AskRequest(BaseModel):
-    question: str
-    history: List[ChatMsg] = []   # <-- add this
+    # accept both "question" and "query"
+    question: Optional[str] = None
+    query: Optional[str] = None
+    history: List[ChatMsg] = []
 
-app = FastAPI()
+    def prompt(self) -> str:
+        return (self.question or self.query or "").strip()
+
+# --------- app ----------
+app = FastAPI(title="TorchLite RAG", version="0.1-test")
+
+# CORS (open by default; set ALLOWED_ORIGINS env to restrict)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"] if ALLOWED_ORIGINS == ["*"] else ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --------- endpoints ----------
+@app.get("/health")
+def health():
+    return {"status": "ok", "top_k": TOP_K}
 
 @app.post("/api/v1/ask")
 def ask(req: AskRequest):
-    # Get answer text + top docs
-    answer, docs = answer_stream(req.question, vectordb, chat_history=[m.model_dump() for m in req.history])
+    prompt = req.prompt()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Missing 'question' (or 'query')")
 
-    lines = [f"Answer: { (answer or '').strip() }"]
+    # call your RAG pipeline
+    try:
+        result = answer_stream(
+            prompt,
+            vectordb,
+            chat_history=[m.model_dump() for m in req.history]
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"RAG failure: {e}")
 
-    # Optional: include sources your frontend can parse
+    # support both: (answer, docs) or just docs
+    answer: str = ""
+    docs: List[Any] = []
+    if isinstance(result, tuple) and len(result) == 2:
+        answer, docs = result
+    else:
+        docs = result
+
+    # plain-text payload your FE already parses
+    lines = [f"Answer: {(answer or '').strip()}"]
+
+    # Sources (dedup by URL)
     seen = set()
     src_lines = []
     for d in (docs or [])[:TOP_K]:
         url = (d.metadata.get("source_url") or d.metadata.get("source") or "").strip()
-        title = (d.metadata.get("title") or d.page_content.splitlines()[0]).strip()
+        first_line = (d.page_content or "").splitlines()[0] if getattr(d, "page_content", None) else "Source"
+        title = (d.metadata.get("title") or first_line).strip()
         if url and url not in seen:
             seen.add(url)
             src_lines.append(f"- {title[:80]} → {url}")
@@ -41,3 +89,7 @@ def ask(req: AskRequest):
         lines.extend(src_lines)
 
     return PlainTextResponse("\n".join(lines), media_type="text/plain; charset=utf-8")
+
+@app.get("/")
+def root():
+    return JSONResponse({"ok": True, "message": "TorchLite RAG API (no API key)"})

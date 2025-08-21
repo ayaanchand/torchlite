@@ -3,3 +3,16 @@ openai
 supabase
 google-auth-oauthlib
 python-dotenv
+
+fastapi==0.112.2
+uvicorn[standard]==0.30.6
+python-dotenv==1.0.1
+langchain==0.2.12
+langchain-openai==0.1.23
+langchain-community==0.2.11
+notion-client==2.2.1
+tiktoken==0.7.0
+supabase==2.6.0
+psycopg[binary]==3.2.1
+requests==2.32.3
+

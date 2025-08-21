@@ -19,7 +19,7 @@ load_dotenv()
 # Toggles & config 
 STREAM_DELAY   = float(os.getenv("STREAM_DELAY", "0.03"))
 MAX_CTX_CHARS  = int(os.getenv("MAX_CTX_CHARS", "6000"))
-TOP_K          = int(os.getenv("TOP_K", "2"))
+TOP_K          = int(os.getenv("TOP_K", "1"))
 MAX_HISTORY_TURNS= int(os.getenv("MAX_HISTORY_TURNS", "8"))  # keep last N turns
 
 SUPABASE_URL   = os.environ["SUPABASE_URL"]
@@ -36,19 +36,23 @@ EMBED_MODEL    = os.getenv("EMBED_MODEL", "text-embedding-3-small")
 
 ASTROLABS_BLURB = (
     "You are chatting with AstroLabs employees. "
-    "AstroLabs is a Dubai-based learning and innovation company that runs "
-    "startup programs, coding & data academies, and coworking spaces across the MENA region. "
-    "Its mission is to build a thriving tech ecosystem by upskilling talent and supporting founders.\n"
+    "AstroLabs is a company that provides support for businesses expanding into Saudi Arabia and the broader MENA region. "
+    "They offer services like business setup, licensing, and guidance on market entry and expansion. "
+    "AstroLabs also focuses on supporting startups and driving growth through various programs and partnerships.\n"
 )
 
 SYSTEM_TXT = (
     ASTROLABS_BLURB +
-    "You are AstroLabs' knowledge assistant. Use the provided context as your primary source. "
-    "Synthesize and summarize across snippets when needed. "
+    "You are AstroLabs' knowledge assistant. Use the provided context as your primary source and do not rely on outside knowledge. "
+    "Answer with depth—not just a summary. Provide clear, structured, and practical responses with: "
+    "• concrete steps/checklists when helpful; "
+    "• brief explanations, examples, and caveats; "
+    "• synthesis across snippets (resolve conflicts explicitly); "
     "If the context is related but incomplete, ask exactly one short clarifying question and stop. "
     "If there is no relevant context at all, reply exactly: I don't know. "
-    "Never invent facts."
-)
+    "Never invent facts. "
+    "Default tone: concise, professional, and helpful; if the user asks for a brief answer (e.g., 'TL;DR'), keep it short."
+);
 
 def _to_langchain_history(history: Optional[List[dict]]) -> List:
     """Convert [{'role':'user'|'assistant'|'system','content':str}, ...] -> LC messages."""
@@ -168,17 +172,15 @@ def main():
     question = " ".join(sys.argv[1:]) or "What is the focus of Week 1?"
     ans, docs = answer_stream(question, vectordb, chat_history=[])
 
-    # print(f"📄 Top-{TOP_K} source(s):")
-    '''
+    print(f"📄 Top-{TOP_K} source(s):")
+
     seen = set()
     for d in docs[:TOP_K]:
         url   = d.metadata.get("source_url", "URL-missing")
         title = d.page_content.splitlines()[0][:80]
         if url not in seen:                 # avoid printing duplicates
-            # print(f"- {title}  →  {url}")
+            print(f"- {title}  →  {url}")
             seen.add(url)
-
-    '''
 
 if __name__ == "__main__":
     main()
