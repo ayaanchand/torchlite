@@ -6,8 +6,8 @@ from dotenv import load_dotenv
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langfuse.langchain import CallbackHandler
-from db_utils import get_vectordb
 from typing import List, Literal, Optional
+from db_utils import get_vectordb
 from langchain.schema import AIMessage, HumanMessage, SystemMessage
 
 from kb_version import get_kb_version  # reads kb_version from Supabase

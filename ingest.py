@@ -7,13 +7,14 @@ from dotenv import load_dotenv
 from notion_client import Client as NotionClient, APIResponseError
 from langchain_community.document_loaders import NotionDBLoader
 from loaders.notion_simple_page import NotionSimplePageLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 
+import requests
 import re, unicodedata
 from db_utils  import get_vectordb
 from kb_version import bump_kb_version
-import requests
+
 
 import collections, threading
 _notn_lock   = threading.Lock()

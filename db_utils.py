@@ -1,9 +1,9 @@
 # db_utils.py
 import os, pathlib
-from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
+from langchain_openai import OpenAIEmbeddings
 from supabase import create_client, Client
-from langchain_community.vectorstores import SupabaseVectorStore   # ⬅️ add this
+from langchain_community.vectorstores import SupabaseVectorStore 
 
 from chromadb import PersistentClient
 
