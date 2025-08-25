@@ -11,7 +11,7 @@ EMBED_MODEL = "text-embedding-3-small"
 
 
 def _abs(path: str) -> str:
-    """Return absolute path independent of caller’s cwd."""
+    
     return str(pathlib.Path(path).expanduser().resolve())
 
 
@@ -29,7 +29,7 @@ def get_vectordb():
             embedding_function=OpenAIEmbeddings(model=EMBED_MODEL),
         )
 
-    # ── default: Supabase ────────────────────────────────────────────────
+    # default: Supabase
     supabase: Client = create_client(
         os.environ["SUPABASE_URL"],
         os.environ["SUPABASE_KEY"],

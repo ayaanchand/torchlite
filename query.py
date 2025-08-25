@@ -18,8 +18,8 @@ load_dotenv()
 
 # Toggles & config 
 STREAM_DELAY   = float(os.getenv("STREAM_DELAY", "0.03"))
-MAX_CTX_CHARS  = int(os.getenv("MAX_CTX_CHARS", "6000"))
-TOP_K          = int(os.getenv("TOP_K", "1"))
+MAX_CTX_CHARS  = int(os.getenv("MAX_CTX_CHARS", "12000"))
+TOP_K          = int(os.getenv("TOP_K", "4"))
 MAX_HISTORY_TURNS= int(os.getenv("MAX_HISTORY_TURNS", "8"))  # keep last N turns
 
 SUPABASE_URL   = os.environ["SUPABASE_URL"]
@@ -30,7 +30,7 @@ SUPABASE_TABLE = os.getenv("SUPABASE_TABLE", "torchlite_embeddings")
 TRACE_ENABLED  = os.getenv("TRACE_ENABLED", "1") == "1"
 SAMPLE_RATE    = float(os.getenv("LANGFUSE_SAMPLING_RATE", "1"))
 
-# Models (also reported in metadata)
+# Models 
 LLM_MODEL      = os.getenv("LLM_MODEL", "gpt-4o")
 EMBED_MODEL    = os.getenv("EMBED_MODEL", "text-embedding-3-small")
 
@@ -42,20 +42,29 @@ ASTROLABS_BLURB = (
 )
 
 SYSTEM_TXT = (
-    ASTROLABS_BLURB +
-    "You are AstroLabs' knowledge assistant. Use the provided context as your primary source and do not rely on outside knowledge. "
-    "Answer with depth—not just a summary. Provide clear, structured, and practical responses with: "
-    "• concrete steps/checklists when helpful; "
-    "• brief explanations, examples, and caveats; "
-    "• synthesis across snippets (resolve conflicts explicitly); "
-    "If the context is related but incomplete, ask exactly one short clarifying question and stop. "
-    "If there is no relevant context at all, reply exactly: I don't know. "
-    "Never invent facts. "
-    "Default tone: concise, professional, and helpful; if the user asks for a brief answer (e.g., 'TL;DR'), keep it short."
-);
+    "You are AstroLabs’ internal knowledge assistant. Your audience is AstroLabs employees.\n"
+    "\n"
+    "Voice & format:\n"
+    "- Write in clear, continuous prose (short paragraphs). Do not use bullets, numbering, or section headings.\n"
+    "- Do not mention or allude to where information came from (no 'context', 'background', 'documents', or 'sources').\n"
+    "\n"
+    "Grounding & safety:\n"
+    "- Use only the material you are given as evidence. If a specific item (number, URL, name, date, price, or policy detail) is not present, say so plainly.\n"
+    "- Never invent URLs, website links, names, headcounts, prices, or policy details. Include a URL only if it appears verbatim in the material.\n"
+    "- Do not output secrets, credentials, or personal data. If a request seems restricted, remind the user to use proper access channels.\n"
+    "\n"
+    "Question type (decide silently):\n"
+    "- FACTUAL: asks for a specific data point or fact (e.g., counts, dates, names, policy clauses, URLs).\n"
+    "- GUIDANCE: asks for advice, judgment, process, or next steps (e.g., 'how should we…', 'what’s the best way…', 'help me…').\n"
+    "\n"
+    "Decision rule:\n"
+    "- If the question is FACTUAL and the material clearly contains the answer, provide a detailed answer in continuous prose.\n"
+    "- If the question is FACTUAL and the material is missing or ambiguous, ask exactly ONE concise clarifying question and STOP. Do not provide general guidance.\n"
+    "- If the question is GUIDANCE, you may provide internal best-practice guidance. If anything is unclear, ask ONE concise clarifying question first,\n"
+    "  then give a detailed guidance answer in prose, stating assumptions and where to verify internally. Do not invent AstroLabs-specific facts.\n"
+)
 
 def _to_langchain_history(history: Optional[List[dict]]) -> List:
-    """Convert [{'role':'user'|'assistant'|'system','content':str}, ...] -> LC messages."""
     if not history:
         return []
     out: List = []
@@ -78,7 +87,6 @@ def _to_langchain_history(history: Optional[List[dict]]) -> List:
 langfuse_handler = CallbackHandler()
 
 def get_callbacks():
-    """Return callbacks list according to toggle + sampling."""
     if not TRACE_ENABLED:
         return []
     return [langfuse_handler] if random.random() < SAMPLE_RATE else []
@@ -109,17 +117,18 @@ def answer_stream(question: str, vectordb, chat_history: Optional[List[dict]] = 
         ("system", SYSTEM_TXT),
         MessagesPlaceholder(variable_name="chat_history"),
         ("human",
-         "Context:\n{context}\n\n"
-         "Question: {user_question}\n\n"
-         "Instructions:\n"
-         "- If the context fully answers the question, answer concisely using the context.\n"
-         "- If the context seems related but you need clarification, reply with one sentence starting with 'Follow-up:' and STOP.\n"
-         "- If the context is irrelevant, reply exactly: I don't know."
+        "Use the BACKGROUND silently. Do not mention that you used any background or documents.\n\n"
+        "BACKGROUND:\n{context}\n\n"
+        "QUESTION (from an AstroLabs employee): {user_question}\n\n"
+        "Requirements:\n"
+        "1) If the background clearly answers a FACTUAL question, respond with a detailed answer in continuous prose (no bullets/headings).\n"
+        "2) If the question is FACTUAL but the background is insufficient or ambiguous, ask ONE concise clarifying question and stop.\n"
+        "3) If the question is GUIDANCE, optionally ask ONE concise clarifying question if needed, then provide a detailed best-practice answer in continuous prose,\n"
+        "   stating assumptions and how/where to verify internally. Do not include any URL or specific figure that does not appear verbatim in the background.\n"
         ),
     ])
 
-    # print("\n--- CONTEXT FED TO LLM ---\n", context[:1500], "\n--------------------------\n")
-    chain = prompt | ChatOpenAI(model_name=LLM_MODEL, temperature=0, streaming=True)
+    chain = prompt | ChatOpenAI(model_name=LLM_MODEL, temperature=0, max_tokens=1600, streaming=True)
 
     callbacks   = get_callbacks()
     kb_version  = get_kb_version()

@@ -10,10 +10,10 @@ from loaders.notion_simple_page import NotionSimplePageLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
 
+import re, unicodedata
 from db_utils  import get_vectordb
 from kb_version import bump_kb_version
 import requests
-import re, unicodedata
 
 import collections, threading
 _notn_lock   = threading.Lock()
@@ -34,26 +34,24 @@ FORCE_REBUILD = os.getenv("FORCE", "0") == "1"
 STATE_FILE      = Path(".ingest_state.json")
 MAX_CONCURRENCY = 3
 
-# ── text normaliser ─────────────────────────────────────────
+# text normaliser
 def _clean(txt: str) -> str:
-    txt = unicodedata.normalize("NFKC", txt)        # tidy accents etc.
-    txt = re.sub(r"[ \t]+\n", "\n", txt)            # trim line-end spaces
-    txt = re.sub(r"\n{3,}", "\n\n", txt)            # max double newline
-    txt = re.sub(r"[ \t]{2,}", " ", txt)            # collapse runs of spaces
+    txt = unicodedata.normalize("NFKC", txt)     
+    txt = re.sub(r"[ \t]+\n", "\n", txt)            
+    txt = re.sub(r"\n{3,}", "\n\n", txt)           
+    txt = re.sub(r"[ \t]{2,}", " ", txt)            
     return txt.strip()
 
-# ── usefulness heuristic ───────────────────────────────────
+# usefulness heuristic
 def _is_useful(txt: str, min_chars: int = 20, min_tokens: int = 5) -> bool:
     if len(txt.strip()) < min_chars:
         return False
-    if not any(c.isalnum() for c in txt):           # all punctuation / emoji
+    if not any(c.isalnum() for c in txt):          
         return False
-    # (if you later add a tokenizer test, put it here)
     return True
 
 # DEBUG ONLY
 def debug_dump_blocks(block_id: str, client: NotionClient, depth: int = 0):
-    """Recursively print block-id and type so we can see what the API returns."""
     indent = "│   " * depth
     try:
         resp = client.blocks.children.list(block_id=block_id, page_size=100)
@@ -75,7 +73,8 @@ def save_state(st: dict) -> None:
     STATE_FILE.write_text(json.dumps(st, indent=2))
 
 def notion_guard():
-    """Block only if the last 3 calls happened in <1 second."""
+
+    # Block only if the last 3 calls happened in <1 second
     with _notn_lock:
         now = time.time()
         if len(_notn_calls) == 3 and now - _notn_calls[0] < 1.0:
@@ -110,13 +109,9 @@ def search_one_ws(client: NotionClient, obj: str|None, limit: int) -> List[dict]
     return results[:limit] if limit > 0 else results
 
 
-# ─── Pull every row in a database safely & convert each row to docs ──────
+# Pull every row in a database safely & convert each row to docs ──────
 def crawl_database_recursive(db_id: str, client: NotionClient) -> list[Document]:
-    """
-    Return Document objects for every row (page) in `db_id`, including:
-      • A Markdown line for each property we care about
-      • Any blocks that live inside the row page itself
-    """
+    
     docs, cursor = [], None
     while True:
         notion_guard()                                       # stay under 3 req/s
@@ -130,7 +125,7 @@ def crawl_database_recursive(db_id: str, client: NotionClient) -> list[Document]
             for name, val in row.get("properties", {}).items():
                 t = val["type"]
 
-                # ── basic text/number/url/checkbox ────────────────────────
+                # basic text/number/url/checkbox
                 if t in ("title", "rich_text"):
                     txt = " ".join(r["plain_text"] for r in val[t]).strip()
 
@@ -143,34 +138,33 @@ def crawl_database_recursive(db_id: str, client: NotionClient) -> list[Document]
                 elif t == "checkbox":
                     txt = "Yes" if val["checkbox"] else "No"
 
-                # ── NEW: metadata fields we now keep ─────────────────────
                 elif t in ("select", "status"):
-                    opt = val[t]            # may be None
+                    opt = val[t]           
                     txt = opt["name"] if opt and opt.get("name") else ""
 
                 elif t == "multi_select":
-                    options = val[t] or []  # None → []
+                    options = val[t] or []  
                     txt = ", ".join(o.get("name", "") for o in options if o)
 
                 elif t == "people":
-                    users = val[t] or []    # None → []
+                    users = val[t] or []  
                     txt = ", ".join(p.get("name", "") for p in users if p)
 
                 elif t == "date":
-                    d = val["date"]           # can be None
+                    d = val["date"]         
                     if d and d.get("start"):
                         txt = d["start"] + (f" → {d['end']}" if d.get("end") else "")
                     else:
-                        txt = ""              # empty date → ignore
+                        txt = ""            
 
 
-                else:                             # relation, roll-up, formula …
-                    txt = ""                      # ignore for now
+                else:                         
+                    txt = ""                    
 
                 if txt.strip():
                     cell_lines.append(f"**{name}**: {txt}")
 
-            # save the row’s property summary iff it’s useful
+            # save the row’s property summary if it’s useful
             if cell_lines:
                 docs.append(
                     Document(
@@ -188,9 +182,7 @@ def crawl_database_recursive(db_id: str, client: NotionClient) -> list[Document]
 
     return docs
 
-# ─────────────────────────────────────────────────────────────────────────
-
-# ─── Recursive crawler that follows child pages & inline / linked DBs ───
+# Recursive crawler that follows child pages & inline / linked DBs
 def crawl_page_recursive(page_id: str, client: NotionClient) -> list[Document]:
     def block_to_markdown(blk: dict) -> str:
         t = blk["type"]
@@ -225,7 +217,7 @@ def crawl_page_recursive(page_id: str, client: NotionClient) -> list[Document]:
             return ""
         return ""
 
-    # --------------- actual crawl -----------------
+    # actual crawl
     docs, queue = [], [page_id]
     while queue:
         current = queue.pop()
@@ -263,9 +255,6 @@ def crawl_page_recursive(page_id: str, client: NotionClient) -> list[Document]:
         if text_parts:
             docs.append(Document("\n\n".join(text_parts), metadata={"source_id": current}))
     return docs
-
-# ─────────────────────────────────────────────────────────────────────────
-
 
 # single‐hit loader with one fallback
 def _load_one(hit: dict, token: str) -> List[Document]:
@@ -354,12 +343,6 @@ def main():
 
     if page_override:
         log(f"Single-page ingest for {page_override[:8]} …")
-
-        # (optional) keep this behind a flag if you ever need it again
-        # if os.getenv("DEBUG_TREE_DUMP") == "1":
-        #     debug_dump_blocks(page_override, NotionClient(auth=TOKENS[0]))
-        #     print("──────────────────────────────────────────────────")
-
         docs = _load_one({"id": page_override, "object": "page"}, TOKENS[0])
         log(f"Found {len(docs)} doc(s) for page {page_override[:8]}")
 
