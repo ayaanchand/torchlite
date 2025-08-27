@@ -15,7 +15,6 @@ load_dotenv()
 
 ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
 
-# --------- models ----------
 class ChatMsg(BaseModel):
     role: Literal["user", "assistant"]
     content: str
@@ -29,10 +28,10 @@ class AskRequest(BaseModel):
     def prompt(self) -> str:
         return (self.question or self.query or "").strip()
 
-# --------- app ----------
+# app
 app = FastAPI(title="TorchLite RAG", version="0.1-test")
 
-# CORS (open by default; set ALLOWED_ORIGINS env to restrict)
+# CORS 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"] if ALLOWED_ORIGINS == ["*"] else ALLOWED_ORIGINS,
@@ -41,7 +40,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --------- endpoints ----------
+# endpoints
 @app.get("/health")
 def health():
     return {"status": "ok", "top_k": TOP_K}
@@ -70,10 +69,10 @@ def ask(req: AskRequest):
     else:
         docs = result
 
-    # plain-text payload your FE already parses
+    # plain-text payload frontend parses
     lines = [f"Answer: {(answer or '').strip()}"]
 
-    # Sources (dedup by URL)
+    # Sources (deduplicate by URL)
     seen = set()
     src_lines = []
     for d in (docs or [])[:TOP_K]:

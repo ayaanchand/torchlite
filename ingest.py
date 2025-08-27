@@ -15,7 +15,6 @@ import re, unicodedata
 from db_utils  import get_vectordb
 from kb_version import bump_kb_version
 
-
 import collections, threading
 _notn_lock   = threading.Lock()
 _notn_calls  = collections.deque(maxlen=3)
